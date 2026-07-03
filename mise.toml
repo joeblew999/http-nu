@@ -93,9 +93,7 @@ run = "cargo clippy --locked --workspace --all-targets --all-features -- -D warn
 [tasks.test]
 description = "Run cargo test across the whole workspace (http-nu + cloudflare-shell + cloudflare-shell-workspace + test plugin)"
 depends = ["build:plugin"]
-# DIAG(temporary): --nocapture streams test + child output live so the windows
-# --topic append trace survives the hang. Revert once diagnosed.
-run = "cargo test --workspace -- --nocapture"
+run = "cargo test --workspace"
 
 [tasks."test:nu"]
 description = "Run nushell test scripts (router, html, datastar)"

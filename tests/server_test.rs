@@ -2465,56 +2465,39 @@ async fn test_watch_topic_reload_on_append() {
         .expect("Failed to get address")
         .expect("Channel closed");
 
-    // DIAG(win-hang): 503 placeholder over TCP, verbose + bounded, stdio
-    // inherited so the trace streams LIVE (needs `cargo test -- --nocapture`).
-    eprintln!("[DIAG] 503 check -> {address}/");
-    let _ = tokio::process::Command::new("curl")
-        .args(["-v", "--max-time", "15"])
+    // Verify placeholder response (503) when topic is empty
+    let output = tokio::process::Command::new("curl")
+        .arg("-s")
+        .arg("-o")
+        // Discard the body so only %{http_code} lands on stdout. /dev/null is
+        // unix-only; NUL is the windows null device.
+        .arg(if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .arg("-w")
+        .arg("%{http_code}")
         .arg(format!("{address}/"))
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
+        .output()
         .await
         .expect("curl failed");
-    eprintln!("[DIAG] 503 check returned");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "503",
+        "Empty topic should serve placeholder with 503"
+    );
 
-    // DIAG(win-hang): does `sock` exist? then append over it, verbose + bounded.
+    // Append a handler closure via the xs API socket
     let sock_path = store_path.join("sock");
-    #[cfg(windows)]
-    let _ = tokio::process::Command::new("cmd")
-        .args(["/c", "dir", "/b"])
-        .arg(&store_path)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
-        .await;
-    #[cfg(unix)]
-    let _ = tokio::process::Command::new("ls")
-        .arg("-la")
-        .arg(&store_path)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
-        .await;
-    eprintln!("[DIAG] append -> unix-socket {}", sock_path.display());
-    let status = tokio::process::Command::new("curl")
-        .args(["-v", "--max-time", "20"])
+    let output = tokio::process::Command::new("curl")
+        .arg("-s")
         .arg("--unix-socket")
         .arg(&sock_path)
-        .args(["-X", "POST", "-d"])
+        .arg("-X")
+        .arg("POST")
+        .arg("-d")
         .arg(r#"{|req| "version1"}"#)
         .arg("http://localhost/append/serve.nu")
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
+        .output()
         .await
         .expect("curl append failed");
-    eprintln!("[DIAG] append returned: {status:?}");
-    let output = std::process::Output {
-        status,
-        stdout: Vec::new(),
-        stderr: Vec::new(),
-    };
     assert!(
         output.status.success(),
         "append should succeed: {}",
@@ -2578,9 +2561,6 @@ async fn test_watch_topic_reload_on_append() {
 /// updated module.
 #[cfg(feature = "cross-stream")]
 #[tokio::test]
-// See test_watch_topic_reload_on_append: windows `curl --unix-socket` cannot reach
-// the xs win_uds store socket, so the append curl hangs. Needs a real store client.
-#[cfg_attr(windows, ignore)]
 async fn test_watch_topic_reload_picks_up_module_changes() {
     let tmp = tempfile::tempdir().unwrap();
     let store_path = tmp.path().join("store");
