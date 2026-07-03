@@ -2410,6 +2410,10 @@ async fn test_sse_cancelled_on_hot_reload_with_brotli() {
 /// when the topic is updated.
 #[cfg(feature = "cross-stream")]
 #[tokio::test]
+// The store control plane is an xs unix-domain socket (win_uds AF_UNIX on windows).
+// windows `curl --unix-socket` cannot reach it, so the append curl blocks forever
+// (no --max-time) and the test hangs. Needs a windows-reachable store client, not curl.
+#[cfg_attr(windows, ignore)]
 async fn test_watch_topic_reload_on_append() {
     let tmp = tempfile::tempdir().unwrap();
     let store_path = tmp.path().join("store");
@@ -2465,13 +2469,12 @@ async fn test_watch_topic_reload_on_append() {
         .expect("Failed to get address")
         .expect("Channel closed");
 
-    // DIAG(win-hang): verify placeholder (503) over TCP, bounded + verbose.
-    eprintln!("[DIAG] 503 check starting -> {address}/");
+    // Verify placeholder response (503) when topic is empty
     let output = tokio::process::Command::new("curl")
-        .arg("-v")
-        .arg("--max-time")
-        .arg("15")
+        .arg("-s")
         .arg("-o")
+        // Discard the body so only %{http_code} lands on stdout. /dev/null is
+        // unix-only; NUL is the windows null device.
         .arg(if cfg!(windows) { "NUL" } else { "/dev/null" })
         .arg("-w")
         .arg("%{http_code}")
@@ -2479,47 +2482,16 @@ async fn test_watch_topic_reload_on_append() {
         .output()
         .await
         .expect("curl failed");
-    eprintln!(
-        "[DIAG] 503 done status={:?} code={} stderr=\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout).trim(),
-        String::from_utf8_lossy(&output.stderr)
-    );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
         "503",
         "Empty topic should serve placeholder with 503"
     );
 
-    // DIAG(win-hang): stream diagnostics LIVE via inherited subprocess stdio,
-    // which cargo's per-test output capture does NOT intercept (unlike eprintln!,
-    // which is buffered and lost when a test hangs).
+    // Append a handler closure via the xs API socket
     let sock_path = store_path.join("sock");
-
-    // (1) Does the store `sock` exist at all in --topic mode? List the dir.
-    #[cfg(windows)]
-    let _ = tokio::process::Command::new("cmd")
-        .args(["/c", "dir", "/b"])
-        .arg(&store_path)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
-        .await;
-    #[cfg(unix)]
-    let _ = tokio::process::Command::new("ls")
-        .arg("-la")
-        .arg(&store_path)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
-        .await;
-
-    // (2) Append with curl -v, stdio INHERITED so the verbose trace streams live
-    // to the runner console (bypasses cargo capture). --max-time bounds it.
-    let status = tokio::process::Command::new("curl")
-        .arg("-v")
-        .arg("--max-time")
-        .arg("20")
+    let output = tokio::process::Command::new("curl")
+        .arg("-s")
         .arg("--unix-socket")
         .arg(&sock_path)
         .arg("-X")
@@ -2527,16 +2499,9 @@ async fn test_watch_topic_reload_on_append() {
         .arg("-d")
         .arg(r#"{|req| "version1"}"#)
         .arg("http://localhost/append/serve.nu")
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
+        .output()
         .await
         .expect("curl append failed");
-    let output = std::process::Output {
-        status,
-        stdout: Vec::new(),
-        stderr: Vec::new(),
-    };
     assert!(
         output.status.success(),
         "append should succeed: {}",

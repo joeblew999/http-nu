@@ -93,10 +93,7 @@ run = "cargo clippy --locked --workspace --all-targets --all-features -- -D warn
 [tasks.test]
 description = "Run cargo test across the whole workspace (http-nu + cloudflare-shell + cloudflare-shell-workspace + test plugin)"
 depends = ["build:plugin"]
-# DIAG: --nocapture streams test + child-process output LIVE (libtest otherwise
-# buffers per-test output and drops it when a test hangs). Revert after the
-# windows --topic-append hang is diagnosed.
-run = "cargo test --workspace -- --nocapture"
+run = "cargo test --workspace"
 
 [tasks."test:nu"]
 description = "Run nushell test scripts (router, html, datastar)"
@@ -647,7 +644,26 @@ run = "cargo build -p nu_plugin_push"
 [tasks."push:vapid:generate"]
 description = "Generate VAPID keypair + admin token, store in fnox keychain. Requires PUSH_VAPID_SUBJECT (mailto: or https: URL)."
 depends = ["push:plugin:build"]
-run = "./scripts/push-demo-vapid-generate.sh"
+run = '''
+#!/usr/bin/env nu
+# Regenerating VAPID keys silently invalidates every existing browser
+# subscription (servers still 201, browsers drop the sub) -- treat as a reset.
+if ($env.PUSH_VAPID_SUBJECT? | default "" | is-empty) {
+  error make {msg: "PUSH_VAPID_SUBJECT must be set (e.g. PUSH_VAPID_SUBJECT=mailto:you@example.com)"}
+}
+# gen_vapid prints `export VAPID_PUBLIC_KEY=...` then `export VAPID_PRIVATE_KEY=...`.
+let vars = (^cargo run --quiet --example gen_vapid -p nu_plugin_push | lines | parse "export {key}={value}")
+let pub = ($vars | where key == "VAPID_PUBLIC_KEY" | get value.0)
+let priv = ($vars | where key == "VAPID_PRIVATE_KEY" | get value.0)
+# `-p keychain` routes the value to the keychain provider, not plaintext fnox.toml.
+^fnox set -p keychain VAPID_PUBLIC_KEY $pub
+^fnox set -p keychain VAPID_PRIVATE_KEY $priv
+^fnox set -p keychain VAPID_SUBJECT $env.PUSH_VAPID_SUBJECT
+^fnox set -p keychain PUSH_ADMIN_TOKEN (^openssl rand -hex 32 | str trim)
+print ""
+print "Stored in fnox keychain. Public key (for browser applicationServerKey):"
+print $pub
+'''
 
 [tasks."push:vapid:public"]
 description = "Print VAPID public key (safe to share -- browser embeds this)"
@@ -667,18 +683,83 @@ outputs = [
   "examples/push-demo/www/icons/512-maskable.png",
   "examples/push-demo/www/icons/apple-touch-180.png",
 ]
-run = "./scripts/push-demo-icons.sh"
+run = '''
+#!/usr/bin/env nu
+mkdir examples/push-demo/www/icons  # nu mkdir creates parents; no -p needed
+^resvg -w 192 examples/push-demo/icons.svg          examples/push-demo/www/icons/192.png
+^resvg -w 512 examples/push-demo/icons.svg          examples/push-demo/www/icons/512.png
+^resvg -w 512 examples/push-demo/icons-maskable.svg examples/push-demo/www/icons/512-maskable.png
+^resvg -w 180 examples/push-demo/icons.svg          examples/push-demo/www/icons/apple-touch-180.png
+print "Icons regenerated."
+'''
 
 [tasks."push-demo:serve"]
 description = "Run push-demo server (HTTP on $PORT). VAPID env injected from fnox via `fnox exec`."
 depends = ["build", "push:plugin:build", "push-demo:icons"]
 env = { PORT = "8080", STORE = "./.store/push-demo", PLUGIN = "./target/debug/nu_plugin_push" }
-run = "./scripts/push-demo-serve.sh"
+run = '''
+#!/usr/bin/env nu
+let port = ($env.PORT? | default "8080")
+let store = ($env.STORE? | default "./.store/push-demo")
+let http_nu = ($env.HTTP_NU? | default "./target/debug/http-nu")
+let plugin = ($env.PLUGIN? | default "./target/debug/nu_plugin_push")
+mkdir $store
+# fnox exec injects VAPID_* + PUSH_ADMIN_TOKEN from the keychain. Fresh clones
+# must run `mise run push:vapid:generate` first.
+^fnox exec -- $http_nu --plugin $plugin --store $store $":($port)" examples/push-demo/serve.nu
+'''
 
 [tasks."push-demo:dev"]
 description = "Run push-demo + cloudflared quick tunnel + QR (open the *.trycloudflare.com URL on your phone)"
 depends = ["build", "push:plugin:build", "push-demo:icons"]
 tools = { "aqua:cloudflare/cloudflared" = "latest" }
 env = { PORT = "8080", STORE = "./.store/push-demo", PLUGIN = "./target/debug/nu_plugin_push" }
-run = "./scripts/push-demo-dev.sh"
+run = '''
+#!/usr/bin/env nu
+let port = ($env.PORT? | default "8080")
+let store = ($env.STORE? | default "./.store/push-demo")
+let http_nu = ($env.HTTP_NU? | default "./target/debug/http-nu")
+let plugin = ($env.PLUGIN? | default "./target/debug/nu_plugin_push")
+mkdir $store
+# Start the demo server as a background job.
+let serve = (job spawn {
+  ^fnox exec -- $http_nu --plugin $plugin --store $store $":($port)" examples/push-demo/serve.nu
+})
+# Wait until it responds.
+mut ready = false
+for _ in 1..50 {
+  let health = (^curl -sf $"http://127.0.0.1:($port)/health" | complete)
+  if $health.exit_code == 0 { $ready = true; break }
+  sleep 200ms
+}
+if not $ready {
+  print $"push-demo failed to start on :($port)"
+  job kill $serve
+  return
+}
+print $"push-demo listening on http://127.0.0.1:($port)"
+print ""
+print "starting cloudflared quick tunnel..."
+print ""
+# Stream cloudflared's output; grab the *.trycloudflare.com URL and render a QR.
+^cloudflared tunnel --no-autoupdate --url $"http://localhost:($port)" out+err>| lines | each {|line|
+  print $line
+  let hit = ($line | parse --regex '(?<url>https://[a-zA-Z0-9.-]+\.trycloudflare\.com)')
+  if ($hit | is-not-empty) {
+    let url = ($hit | get url.0)
+    print ""
+    print "  ============================================"
+    print "  Open this on your phone:"
+    print $"  ($url)"
+    print "  ============================================"
+    print ""
+    if (which qrencode | is-not-empty) {
+      ^qrencode -t ANSIUTF8 $url
+    } else {
+      print "(install qrencode for a QR code: brew install qrencode)"
+    }
+    print ""
+  }
+}
+'''
 
