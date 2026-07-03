@@ -97,7 +97,7 @@ Replace `OLD` and `NEW` below with the actual versions (e.g. `OLD=1.0.1`,
    `include_bytes!` "file not found" at compile time.
 
    ```bash
-   ./scripts/check.sh
+   ./scripts/check.nu
    ```
 
 7. **Smoke test the served asset** -- confirm both the plain and brotli paths

@@ -88,7 +88,7 @@ curl -X PUT --data-binary @serve.nu \
 Method: `mise run ex:cf:<name>` -> `curl http://127.0.0.1:8787/...` (default DO).
 Demos with non-Nu assets (templates, static files, JSON) need
 `DEMO=<name> mise run cf:seed:demo` to upload those to the workspace
-first. Last full sweep: see `scripts/cf-demos-probe.sh`.
+first. Last full sweep: see `scripts/cf-demos-probe.nu`.
 
 | Example | Status | Notes |
 |---|---|---|

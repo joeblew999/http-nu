@@ -1,6 +1,6 @@
 ## Before declaring a 2048 change done
 
-Run `examples/2048/test/check.sh`. The top-level `scripts/check.sh`
+Run `examples/2048/test/check.sh`. The top-level `scripts/check.nu`
 only runs the pure unit tests (`test.nu`); the per-example
 `check.sh` adds the SSE-pipeline tests (`test-sse.nu`, requires
 `--store`) and the browser e2e (`test.mjs`, chromium). The latter
