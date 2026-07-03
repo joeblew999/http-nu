@@ -788,6 +788,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         datastar: args.datastar,
     };
 
+    eprintln!("[SRV] calling serve() -- waiting for first engine + listener bind");
     serve(
         addr,
         args.tls,

@@ -106,17 +106,23 @@ impl Store {
     ) {
         let store_path = self.path.display().to_string();
 
+        eprintln!("[SRV] topic_source: read_topic_content start");
         let (initial_script, last_id) = match self.read_topic_content(topic) {
             Some((content, id)) => (content, Some(id)),
             None => (placeholder_closure(topic, &store_path), None),
         };
+        eprintln!("[SRV] topic_source: read_topic_content done; enrich start");
 
         let enriched = enrich_engine(&base_engine, &self.inner, last_id.as_ref());
+        eprintln!("[SRV] topic_source: enrich done; script_to_engine start");
         if let Some(engine) = crate::engine::script_to_engine(&enriched, &initial_script, None) {
+            eprintln!("[SRV] topic_source: engine built; tx.send start");
             tx.send(engine).await.expect("channel closed unexpectedly");
+            eprintln!("[SRV] topic_source: tx.send done");
         }
 
         if watch {
+            eprintln!("[SRV] topic_source: spawn_topic_watcher start");
             spawn_topic_watcher(
                 self.inner.clone(),
                 topic.to_string(),
@@ -124,7 +130,9 @@ impl Store {
                 base_engine,
                 tx,
             );
+            eprintln!("[SRV] topic_source: spawn_topic_watcher done");
         }
+        eprintln!("[SRV] topic_source: DONE");
     }
 
     fn read_topic_content(&self, topic: &str) -> Option<(String, scru128::Scru128Id)> {
