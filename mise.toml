@@ -1,24 +1,11 @@
+# Project-local tasks only. See MISE-RETIREMENT.md for retired workflows and prerequisites.
 [settings]
 # extends task-inheritance is mise experimental — required by the
-# joeblew999/.github shared task lib (ci:_base, rust:_base, etc.).
 experimental = true
 
-[task_config]
-# Shared TOML task library from joeblew999/.github. Per-task tool pins
-# (gh, jq, fnox, nu) propagate from the lib; consumers don't pin them
-# globally. Tag bumps -> see https://github.com/joeblew999/.github/blob/main/CHANGELOG.md
-includes = [
-  "git::https://github.com/joeblew999/.github.git//tasks/ci.toml?ref=v0.67.1",
-  "git::https://github.com/joeblew999/.github.git//tasks/mise.toml?ref=v0.67.1",
-  "git::https://github.com/joeblew999/.github.git//tasks/tool-rust.toml?ref=v0.67.1",
-  "git::https://github.com/joeblew999/.github.git//tasks/tool-cf.toml?ref=v0.67.1",
-  "git::https://github.com/joeblew999/.github.git//tasks/tool-wrangler.toml?ref=v0.67.1",
-]
 
 [tools]
 # Repo-specific tools only -- global tools (fnox/gh/jq/usage/git-cliff) come from
-# `mise run mise:global:bootstrap`, and Rust is owned by rust-toolchain.toml
-# (rustup), NEVER here -- `ci:check-global` enforces both.
 "github:nushell/nushell" = "0.113"   # per-repo override: MUST match the embedded engine (nu-* crates 0.113.1)
 # NOTE: push-demo's tools (resvg, cloudflared) are declared PER-TASK in the
 # push-demo section below, NOT here -- so `mise install` in CI never pulls them.
@@ -30,9 +17,6 @@ includes = [
 "npm:wrangler"           = "4.71.0"
 
 [env]
-# CI_OS_MATRIX is read by mise:repo:bootstrap and projected into the generated
-# workflow stub; setting it here keeps re-bootstrap from clobbering the override.
-CI_OS_MATRIX     = '["ubuntu-latest", "macos-latest", "windows-latest"]'
 CARGO_TERM_COLOR = "always"
 PORT = "3001"
 STORE = "./.store"
@@ -116,13 +100,8 @@ let bin = ("target" | path join "debug" $name)
 ^$bin eval examples/tao/test.nu
 '''
 
-# Local extension of the shared `ci` umbrella (ci:check-global + ci:check-nu
-# from joeblew999/.github tasks/ci.toml). mise MERGES the depends, so the shared
 # guards still run -- this only adds the repo's native build + test set. CF/wasm
 # and wrangler tasks are intentionally excluded (they need extra targets/daemons).
-[tasks.ci]
-description = "CI -- shared guards (merged) + this repo's native build/test"
-depends = ["test:nu", "fmt:check", "clippy", "test", "test:tao"]
 
 
 # ============================================================================
@@ -252,29 +231,7 @@ dir = "{{config_root}}/src/cf"
 tools = { "npm:wrangler" = "4.90", node = "22" }
 run = "wrangler dev"
 
-[tasks."cf:deploy"]
-description = "Deploy the http-nu Worker to Cloudflare (requires CLOUDFLARE_API_TOKEN). Forces release-mode build via cf:build's CF_BUILD_MODE env."
-depends = ["cf:token-check"]
-dir = "{{config_root}}/src/cf"
-tools = { "npm:wrangler" = "4.90", node = "22" }
-run = '''
-#!/usr/bin/env nu
-$env.CLOUDFLARE_API_TOKEN = ($env.CLOUDFLARE_API_TOKEN? | default (^fnox get CLOUDFLARE_API_TOKEN | str trim))
-$env.CF_BUILD_MODE = "release"
-^mise run cf:build
-^wrangler deploy
-'''
 
-[tasks."cf:tail"]
-description = "Live-tail logs from the deployed http-nu Worker (wrangler tail; requires CLOUDFLARE_API_TOKEN)"
-depends = ["cf:token-check"]
-dir = "{{config_root}}/src/cf"
-tools = { "npm:wrangler" = "4.90", node = "22" }
-run = '''
-#!/usr/bin/env nu
-$env.CLOUDFLARE_API_TOKEN = ($env.CLOUDFLARE_API_TOKEN? | default (^fnox get CLOUDFLARE_API_TOKEN | str trim))
-^wrangler tail
-'''
 
 [tasks."ex:cf:blog"]
 description = "examples/blog on CF -- works end-to-end (router DSL, HTML DSL, content-type)"
@@ -411,23 +368,6 @@ dir = "{{config_root}}"
 depends = ["cf:bundle:hub"]
 run = "CF_HANDLER_PATH=../../target/cf-hub.nu mise run cf:build"
 
-[tasks."cf:deploy:hub"]
-description = "Deploy the CF hub to the live worker AND seed asset-dependent demos. Wraps `cf:deploy` with hub-specific bundling + post-deploy seeding. Live URL: https://http-nu-cf.gedw99.workers.dev/"
-dir = "{{config_root}}"
-depends = ["cf:bundle:hub"]
-run = '''
-#!/usr/bin/env nu
-$env.CF_HANDLER_PATH = "../../target/cf-hub.nu"
-^mise run cf:deploy
-
-# Seed asset-dependent demos against the live worker so first-time
-# visitors get a working page without manual seeding.
-let live_base = ($env.LIVE_BASE? | default "https://http-nu-cf.gedw99.workers.dev")
-for d in ["mermaid-editor"] {
-  print $"seeding ($d) into ($live_base)"
-  with-env {BASE: $live_base, DEMO: $d} { ^mise run cf:seed:demo }
-}
-'''
 
 [tasks."cf:wipe"]
 description = "Wipe the local wrangler dev's Workspace (the default DO unless WS_USER=<user> selects a per-user DO via /u/<user>/). Useful when re-seeding or recovering."
@@ -452,46 +392,6 @@ for entry in $parsed {
 print $"wiped ($base)($prefix)/*"
 '''
 
-[tasks."cf:seed:demo"]
-description = "Upload one demo's assets into the local wrangler dev's default Workspace. Usage: DEMO=tao mise run cf:seed:demo (default DO). Set WS_USER=bob to seed a per-user DO via /u/bob/. Use this AFTER mise run ex:cf:<demo> is listening on :8787. Skips *.nu (already in wasm). BASE=http://127.0.0.1:8787 by default."
-dir = "{{config_root}}"
-run = '''
-#!/usr/bin/env nu
-let demo = ($env.DEMO? | default "")
-if ($demo | is-empty) { error make {msg: "usage: DEMO=<demo-name> mise run cf:seed:demo"} }
-let base = ($env.BASE? | default "http://127.0.0.1:8787")
-let ws_user = ($env.WS_USER? | default "")
-let prefix = (if ($ws_user | is-not-empty) { $"/u/($ws_user)" } else { "" })
-let src = $"examples/($demo)"
-
-if not ($src | path exists) { error make {msg: $"($src) not found"} }
-let reachable = (do -i { ^curl -s -o /dev/null --connect-timeout 1 $"($base)($prefix)/_workspace/ls?path=/" } | complete | get exit_code) == 0
-if not $reachable {
-  error make {msg: $"($base) not reachable -- start mise run ex:cf:($demo) first"}
-}
-
-let files = (glob $"($src)/**/*" | where {|p| ($p | path type) == "file" })
-mut count = 0
-mut fail = 0
-for file in $files {
-  # Skip nu sources -- the handler is already in the wasm.
-  if ($file | str ends-with ".nu") { continue }
-  let rel = ($file | str replace $"($src)/" "")
-  let mime = (do -i { ^file --brief --mime-type $file } | complete | get stdout | str trim | default "application/octet-stream")
-  let mime = (if ($mime | is-empty) { "application/octet-stream" } else { $mime })
-  let url = $"($base)($prefix)/_workspace/put?path=/($rel)"
-  let http_code = (^curl -s -o /dev/null -w "%{http_code}" -X POST -H $"Content-Type: ($mime)" --data-binary $"@($file)" $url | str trim)
-  if $http_code == "200" {
-    $count = $count + 1
-  } else {
-    print --stderr $"($rel) (($http_code))"
-    $fail = $fail + 1
-  }
-}
-
-print $"seeded ($count) files from ($src) into ($base)($prefix)/"
-if $fail != 0 { error make {msg: $"($fail) uploads failed"} }
-'''
 
 [tasks."cf:upload"]
 description = "Generic: upload SRC (a directory) into the local wrangler dev's Workspace under DEST. Usage: SRC=target/doc DEST=/target/doc mise run cf:upload. Defaults: BASE=http://127.0.0.1:8787, default DO (set WS_USER=name for per-user via /u/<name>)."
@@ -761,5 +661,47 @@ print ""
     print ""
   }
 }
+'''
+
+
+[tasks."cf:seed:demo"]
+description = "Upload one demo's assets into the local wrangler dev's default Workspace. Usage: DEMO=tao mise run cf:seed:demo (default DO). Set WS_USER=bob to seed a per-user DO via /u/bob/. Use this AFTER mise run ex:cf:<demo> is listening on :8787. Skips *.nu (already in wasm). BASE=http://127.0.0.1:8787 by default."
+dir = "{{config_root}}"
+run = '''
+#!/usr/bin/env nu
+let demo = ($env.DEMO? | default "")
+if ($demo | is-empty) { error make {msg: "usage: DEMO=<demo-name> mise run cf:seed:demo"} }
+let base = ($env.BASE? | default "http://127.0.0.1:8787")
+let ws_user = ($env.WS_USER? | default "")
+let prefix = (if ($ws_user | is-not-empty) { $"/u/($ws_user)" } else { "" })
+let src = $"examples/($demo)"
+
+if not ($src | path exists) { error make {msg: $"($src) not found"} }
+let reachable = (do -i { ^curl -s -o /dev/null --connect-timeout 1 $"($base)($prefix)/_workspace/ls?path=/" } | complete | get exit_code) == 0
+if not $reachable {
+  error make {msg: $"($base) not reachable -- start mise run ex:cf:($demo) first"}
+}
+
+let files = (glob $"($src)/**/*" | where {|p| ($p | path type) == "file" })
+mut count = 0
+mut fail = 0
+for file in $files {
+  # Skip nu sources -- the handler is already in the wasm.
+  if ($file | str ends-with ".nu") { continue }
+  let rel = ($file | str replace $"($src)/" "")
+  let mime = (do -i { ^file --brief --mime-type $file } | complete | get stdout | str trim | default "application/octet-stream")
+  let mime = (if ($mime | is-empty) { "application/octet-stream" } else { $mime })
+  let url = $"($base)($prefix)/_workspace/put?path=/($rel)"
+  let http_code = (^curl -s -o /dev/null -w "%{http_code}" -X POST -H $"Content-Type: ($mime)" --data-binary $"@($file)" $url | str trim)
+  if $http_code == "200" {
+    $count = $count + 1
+  } else {
+    print --stderr $"($rel) (($http_code))"
+    $fail = $fail + 1
+  }
+}
+
+print $"seeded ($count) files from ($src) into ($base)($prefix)/"
+if $fail != 0 { error make {msg: $"($fail) uploads failed"} }
 '''
 

@@ -21,7 +21,7 @@ CLOUDFLARE_API_TOKEN = { provider = "keychain", value = "CLOUDFLARE_API_TOKEN" }
 # `fnox exec`. Fresh clones must run push:vapid:generate first. Regenerating
 # VAPID keys invalidates every existing browser subscription (silent -- servers
 # still 201, browsers drop the sub client-side), so treat it as a reset.
-VAPID_PUBLIC_KEY  = { provider = "keychain", value = "VAPID_PUBLIC_KEY" }
-VAPID_PRIVATE_KEY = { provider = "keychain", value = "VAPID_PRIVATE_KEY" }
-VAPID_SUBJECT     = { provider = "keychain", value = "VAPID_SUBJECT" }
-PUSH_ADMIN_TOKEN  = { provider = "keychain", value = "PUSH_ADMIN_TOKEN" }
+VAPID_PUBLIC_KEY= { provider = "keychain", value = "VAPID_PUBLIC_KEY" }
+VAPID_PRIVATE_KEY= { provider = "keychain", value = "VAPID_PRIVATE_KEY" }
+VAPID_SUBJECT= { provider = "keychain", value = "VAPID_SUBJECT" }
+PUSH_ADMIN_TOKEN= { provider = "keychain", value = "PUSH_ADMIN_TOKEN" }
