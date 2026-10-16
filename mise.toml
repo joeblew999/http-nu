@@ -215,7 +215,7 @@ run = "$HTTP_NU --datastar :$PORT examples/2048/serve.nu"
 [tasks."cf:build"]
 description = "Build the http-nu Workers cdylib via worker-build. CF_HANDLER_PATH (relative to src/cf/) picks the embedded example; defaults to examples/blog/serve.nu. Set CF_BUILD_MODE=release for an optimised build (slower, what cf:deploy uses); defaults to dev for fast local iteration."
 dir = "{{config_root}}"
-tools = { "cargo:worker-build" = "^0.8" }
+tools = { "cargo:worker-build" = "0.8" }
 run = '''
 #!/usr/bin/env nu
 $env.CF_HANDLER_PATH = ($env.CF_HANDLER_PATH? | default "../../examples/blog/serve.nu")
